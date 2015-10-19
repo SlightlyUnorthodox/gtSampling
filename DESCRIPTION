@@ -1,0 +1,10 @@
+Package: gtSampling
+Type: Package
+Title: Sampling library for Grokit
+Version: 1.0
+Date: 2015-9-16
+Author: Jon Claus, Tera Insights, LLC
+Maintainer: Jon Claus <jonterainsights@gmail.com>
+Description: Provides estimation for queries based on sampling
+License: Propietary
+Depends: gtStats
