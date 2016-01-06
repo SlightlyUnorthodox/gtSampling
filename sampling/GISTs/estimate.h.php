@@ -156,7 +156,7 @@ class <?=$className?> {
   using Array = arma::vec::fixed<kNumCoefs>;
 
  private:
-  // The GLA that performed the sub-sampling..
+  // The GLA that performed the sub-sampling.
   SamplingGLA sample;
 
   // The size of the sub-sample.
@@ -317,6 +317,9 @@ class <?=$className?> {
       cout << "bits = " << (CountBits(u | s) % 2) << endl;
       cout << "mult = " << (1 - 2 * (int) (CountBits(u | s) % 2)) << endl;
       cout << "b_su = " << b[s | u] << endl;
+      // This differs from the vldb paper which says the exponent is |s| + |u|.
+      // This is intentional as that is a typo. It should read |t \ u| which is
+      // equivalent to |t - u|, as u is a subset of t.
       coef += (1 - 2 * (int) (CountBits(t - u) % 2)) * b[s | u];
       cout << "coef = " << coef << endl;
     }

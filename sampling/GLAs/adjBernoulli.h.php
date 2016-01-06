@@ -14,14 +14,19 @@
 // size is at least the minimum size. The final size can be below the minimum
 // size if not enough items are processed.
 
+// Whether an item is included in the sample is entirely determined by its keys
+// and the offset template argument. The order of chunks does not affect it.
+
 // Template Args:
 // minimum: The minimum size allowed for the sample.
 // maximum: The maximum size allowed for the sample.
 // increase: The factor by which the probability is increased by.
 // decrease: The factor by which the probability is decreased by.
+// seed: The initial value used in the hashing, an integer between 0 and 10^9.
 
 // Resources:
 // algorithm: min
+// limits: numeric_limits
 // HashFct.h: CongruentHash
 
 function Adjustable_Bernoulli($t_args, $inputs, $outputs) {
@@ -40,6 +45,7 @@ function Adjustable_Bernoulli($t_args, $inputs, $outputs) {
     $maximum  = $t_args['maximum'];
     $increase = pow($t_args['increase'], 1 / count($keys));
     $decrease = pow($t_args['decrease'], 1 / count($keys));
+    $seed     = $t_args['seed'];
 
     // The outputs have the same time as inputs.
     $outputs  = array_combine(array_keys($outputs), $inputs);
@@ -47,7 +53,7 @@ function Adjustable_Bernoulli($t_args, $inputs, $outputs) {
 
     $sys_headers  = ['algorithm'];
     $user_headers = [];
-    $lib_headers  = ['HashFct.h'];
+    $lib_headers  = ['base\HashFct.h'];
     $libraries    = [];
     $extra        = [];
     $result_type  = ['fragment', 'multi'];
@@ -101,6 +107,9 @@ class <?=$className?> {
   // The factor by which the probability is decreased by.
   static const constexpr double kDecrease = <?=$decrease?>;
 
+  // The factor by which the probability is decreased by.
+  static const constexpr HashType kSeed = <?=$seed?>;
+
   // The maximum number of fragments to split the result into.
   static const constexpr int kNumFragments = 192;
 
@@ -135,7 +144,7 @@ class <?=$className?> {
   void AddItem(<?=const_typed_ref_args($inputs_)?>) {
     count++;
     KeySet keys(<?=args($keys)?>);
-    if (DetermineInclusion(keys)) {
+    if (DetermineInclusion(keys, probability)) {
       sample.push_back(Item(keys, value));
       if (sample.size() > kMaximumSize)
         Resize();
@@ -145,13 +154,13 @@ class <?=$className?> {
   void AddState(<?=$className?> &other) {
     count += other.count;
     if (probability < other.probability) {
-      Refilter(sample, other.sample);
+      Refilter(sample, other.sample, probability);
     } else if (probability == other.probability) {
       sample.insert(other.sample.end(), sample.begin(), sample.end());
     } else {
       probability = other.probability;
       Sample copy(other.sample);
-      Refilter(copy, sample);
+      Refilter(copy, sample, probability);
       sample.swap(copy);
     }
     Resize();
@@ -197,13 +206,12 @@ class <?=$className?> {
   long GetSize() const { return sample.size(); }
   const Sample& GetSample() const { return sample; }
 
- private:
   // This function determines whether an item is included in the sample based on
   // its keys. It is entirely deterministic and depends only on the keys and the
   // probability of inclusion. The offset is continuously altered in attempt to
   // increase the randomness of selection.
-  bool DetermineInclusion(KeySet keys) {
-    HashType offset = 1;
+  static bool DetermineInclusion(KeySet keys, double probability) {
+    HashType offset = kSeed;
 <?  for ($index = 0; $index < count($keys); $index++) { ?>
     if (CongruentHash(Hash(get<<?=$index?>>(keys)), offset) > probability * kMax)
       return false;
@@ -213,6 +221,15 @@ class <?=$className?> {
     return true;
   }
 
+  // Refilters the current sample based on the current probability and adds the
+  // result to copy. The result doesn't overwrite copy to increase flexibility.
+  static void Refilter(Sample& copy, const Sample& sample, double probability) {
+    for (auto item : sample)
+      if (DetermineInclusion(item.first, probability))
+        copy.push_back(item);
+  }
+
+ private:
   // Resizes the sample by altering the probability and refiltering the sample.
   void Resize() {
     int original = sample.size();
@@ -221,25 +238,20 @@ class <?=$className?> {
       copy.reserve(sample.size());
       // The sample is shrunk becasue it is too large.
       probability /= kDecrease;
-      Refilter(copy, sample);
+      Refilter(copy, sample, probability);
       // The sample is enlarged to meet the minimum size.
       while (copy.size() < kMinimumSize) {
         copy.clear();
         probability *= kIncrease;
-        Refilter(copy, sample);
+        Refilter(copy, sample, probability);
       }
       sample.swap(copy);
     }
   }
-
-  // Refilters the current sample based on the current probability and adds the
-  // result to copy. The result doesn't overwrite copy to increase flexibility.
-  void Refilter(Sample& copy, const Sample& sample) {
-    for (auto item : sample)
-      if (DetermineInclusion(item.first))
-        copy.push_back(item);
-  }
 };
+
+// This is needed even though the static member is a basic type.
+const int <?=$className?>::kNumFragments;
 
 typedef <?=$className?>::Iterator <?=$className?>_Iterator;
 
