@@ -156,7 +156,7 @@ class <?=$className?> {
     if (probability < other.probability) {
       Refilter(sample, other.sample, probability);
     } else if (probability == other.probability) {
-      sample.insert(other.sample.end(), sample.begin(), sample.end());
+      sample.insert(sample.end(), other.sample.begin(), other.sample.end());
     } else {
       probability = other.probability;
       Sample copy(other.sample);
