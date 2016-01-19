@@ -50,37 +50,37 @@ inline double ComputeCCoefficient(uint32_t s, uint32_t t, const arma::vec& b) {
 }
 
 // These functions precompute all the necessary coefficients and store them.
-template <uint_32t K, uint32_t N = K - 1>
-inline void ComputeCoefficients(arma::mat::fixed<K, K>& c_st,
-                                const arma::vec::fixed<K>& b) {
-  for (uint32_t s = 0; s <= N; s++)
-    for (uint32_t t = 0; t <= N; t++)
+template <uint32_t N>
+inline void ComputeCoefficients(arma::mat::fixed<N, N>& c_st,
+                                const arma::vec::fixed<N>& b) {
+  for (uint32_t s = 0; s < N; s++)
+    for (uint32_t t = 0; t < N; t++)
       if (s & t)  // t is not a subset of the complement of s.
         continue;
       else
         c_st(s, t) = ComputeCCoefficient(s, t, b);
 }
 
-template <uint_32t K, uint32_t N = K - 1>
-inline void ComputeCoefficients(arma::vec::fixed<K>& c_s,
-                                const arma::vec::fixed<K>& b) {
-  for (uint32_t s = 0; s <= N; s++)
-    c_s(s) = ComputeCCoefficients(s, b);
+template <uint32_t N>
+inline void ComputeCoefficients(arma::vec::fixed<N>& c_s,
+                                const arma::vec::fixed<N>& b) {
+  for (uint32_t s = 0; s < N; s++)
+    c_s(s) = ComputeCCoefficient(s, b);
 }
 
 // This computes the unbiased y_s coefficients in place. Because the mask s is
 // decreasing during the loop, it is guaranteed that y[s | t] has already been
 // unbiased, as s | t >= s regardless of s and t.
-template <uint_32t K, uint32_t N = K - 1>
-inline void UnbiasCoefficients(arma::vec::fixed<K>>& y_s,
-                               const arma::mat::fixed<K, K>& c_st,
-                               const arma::vec::fixed<K>& b) {
-  for (uint32_t s = N; s <= N; s--) {
-    for (uint32_t t = 1; t <= N; t++)
+template <uint32_t N>
+inline void UnbiasCoefficients(arma::vec::fixed<N>& y_s,
+                               const arma::mat::fixed<N, N>& c_st,
+                               const arma::vec::fixed<N>& b) {
+  for (uint32_t s = N; s < N; s--) {
+    for (uint32_t t = 1; t < N; t++)
       if (t & s)  // t is not a subset of the complement of s.
         continue;
       else
-        y_(s) -= c_st(s, t) * y[s | t];
+        y_s(s) -= c_st(s, t) * y_s[s | t];
     y_s(s) /= ComputeCCoefficient(s, 0);
   }
 }
