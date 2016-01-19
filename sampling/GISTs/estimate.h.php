@@ -36,9 +36,9 @@
 // expected value and its standard deviation.
 
 // Resources:
-// armadillo: vectors
-// math.h: pow
-// unordered_map: unordered_map
+//   armadillo: vectors
+//   math.h: pow
+//   unordered_map: unordered_map
 function Estimate($t_args, $outputs, $states)
 {
     // Class name is randomly generated.
@@ -291,73 +291,6 @@ class <?=$className?> {
       y_hat[s] = (y[s] - sum) / ComputeCCoefficient(s, 0);
     }
     cout << "Unbiased coefficients: " << y_hat.t();
-  }
-
-  // This function computes the value of c_s,t given s and t as bit masks. The
-  // value is then cache to avoid repeated computation.
-  double ComputeCCoefficient(Mask s, Mask t) {
-    // First check if the value has been computed.
-    HashType key = ((HashType) s << 32) + t;
-    auto it = c.find(key);
-    if (it != c.end()) {
-      cout << "Retrieved hashed value for s = " << s << " and t = " << t << endl;
-      cout << "Value is " << it->second;
-      return it->second;
-    }
-    // The value has not been computed.
-    double coef = 0;
-    cout << "computing coef: " << s << " " << t << endl;
-    for (Mask u = 0; u <= t; u++) {  // A bit mask representing the set u.
-      if (u & ~t)  // u is not a subset of t and we ignore this case.
-        continue;
-      cout << "u = " << u << endl;
-      // t is a subset of the complement of s, meaning they share no elements.
-      // u is a subset of T, meaning it and s share no elements. Hence, |u U s|
-      // is equivalent to |u| + |s|.
-      cout << "bits = " << (CountBits(u | s) % 2) << endl;
-      cout << "mult = " << (1 - 2 * (int) (CountBits(u | s) % 2)) << endl;
-      cout << "b_su = " << b[s | u] << endl;
-      // This differs from the vldb paper which says the exponent is |s| + |u|.
-      // This is intentional as that is a typo. It should read |t \ u| which is
-      // equivalent to |t - u|, as u is a subset of t.
-      coef += (1 - 2 * (int) (CountBits(t - u) % 2)) * b[s | u];
-      cout << "coef = " << coef << endl;
-    }
-    cout << "result: " << coef << endl << endl;;
-    c.insert(std::make_pair(key, coef));
-    return coef;
-  }
-
-  // This function computes the value of c_s given s as a bit mask. Unlike the
-  // previous function, no values are cached as each c_s is only needed once.
-  double ComputeCCoefficient(Mask s) {
-    cout << "computing c_s for s = " << s << endl;
-    double coef = 0;
-    for (Mask t = 0; t <= s; t++) {
-      if (t & ~s)  // t is not a subset of s.
-        continue;
-      // Because t is a subset of s, |t| + |s| = |s \ t| mod 2 because whichever
-      // element appears in t will appear in s as well. This means that such an
-      // element will be counted twice on the left hand side and therefore not
-      // affect the parity of the result.
-      cout << "t = " << t << endl;
-      cout << "bits = " << (CountBits(s - t) % 2) << endl;
-      cout << "mult = " << (1 - 2 * (int) (CountBits(s - t) % 2)) << endl;
-      cout << "b_t = " << b[t] << endl;
-      cout << "change = " << (1 - 2 * (int) (CountBits(s - t) % 2)) * b[t] << endl;
-      cout << "coef = " << coef << endl;
-      coef += (1 - 2 * (int) (CountBits(s - t) % 2)) * b[t];
-      cout << "coef = " << coef << endl;
-    }
-    cout << "c_s: " << coef << " s: " << s << endl << endl;;
-    return coef;
-  }
-
-  // The bitwise-SWAR algorithm for computing the Hamming Weight of an integer.
-  Mask CountBits(Mask i) {
-     i = i - ((i >> 1) & 0x55555555);
-     i = (i & 0x33333333) + ((i >> 2) & 0x33333333);
-     return (((i + (i >> 4)) & 0x0F0F0F0F) * 0x01010101) >> 24;
   }
 };
 
