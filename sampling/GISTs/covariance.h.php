@@ -33,7 +33,7 @@ function Covariance($t_args, $outputs, $states)
 
     $sys_headers  = ['armadillo', 'math.h', 'unordered_map'];
     $user_headers = [];
-    $lib_headers  = [];
+    $lib_headers  = ['coefs.h'];
     $libraries    = [];
     $extra        = [];
     $result_type  = [$outputCoefs ? 'multi' : 'single'];
@@ -111,9 +111,6 @@ class <?=$className?> {
   // The number of coefficients, 2 ^ kNumRelations.
   static const constexpr int kNumCoefs = <?=$numCoefs?>;
 
-  // The type used for the various arrays.
-  using Array = arma::vec::fixed<kNumCoefs>;
-
  private:
   // The sub-samples used as inputs.
   SampleX sample_x;
@@ -123,10 +120,11 @@ class <?=$className?> {
   double a;
 
   // The GUS, sample, and unbiased coefficients.
-  Array b, y, y_hat;
+  arma::vec::fixed<kNumCoefs> b, y;
 
-  // A hash map containing the c_s,t coefficients.
-  Map c;
+  // Containers for the precomputed c coefficients.
+  arma::vec::fixed<kNumCoefs> c_s;
+  arma::mat::fixed<kNumCoefs, kNumCoefs> c_st;
 
 <?  if ($outputCoefs) { ?>
   // The index used for the multi-type result.
@@ -137,6 +135,9 @@ class <?=$className?> {
   <?=$className?>(<?=const_typed_ref_args($states_)?>)
       : a(<?=$a?>),
         b({<?=$bElems?>}) {
+    // Precomputing the coefficients.
+    ComputeCoefficients(c_st, b);
+    ComputeCoefficients(c_s, b);
     // Combining the two samples.
     auto x = state_x.GetGLA1();
     auto y = state_y.GetGLA1();
@@ -193,7 +194,7 @@ class <?=$className?> {
 <?  if ($outputCoefs) { ?>
   void Finalize() {
     index = 0;
-    ComputeCoefficients();
+    UnbiasCoefficients(y, c_st, b);
   }
 
   bool GetNextResult(<?=typed_ref_args($outputs_)?>) {
@@ -201,7 +202,7 @@ class <?=$className?> {
       return false;
     s = index;
     y_s = y_hat[s];
-    c_s = ComputeCCoefficient(s);
+    c_s = c_s(s);
     a = a;
     b_s = b[s];
     index++;
@@ -209,11 +210,11 @@ class <?=$className?> {
   }
 <?  } else { ?>
   void GetResult(<?=typed_ref_args($outputs_)?>) {
-    ComputeCoefficients();
+    UnbiasCoefficients(y, c_st, b);
     covariance = 0;
     for (Mask s = 0; s < kNumCoefs; s++)
-      covariance += ComputeCCoefficient(s) * y_hat[s];
-    covariance -= pow(a, 2) * y_hat[0];
+      covariance += c_s(s) * y(s);
+    covariance -= pow(a, 2) * y(0);
     cout << "covariance: " << covariance << endl;\
   }
 <?  } ?>
@@ -245,91 +246,6 @@ class <?=$className?> {
 <?  } ?>
     //cout << endl << "Mask: " << mask << " Result: " << result << endl;
     return result;
-  }
-
-  // This function computes the values of y_hat based on y. Because the mask is
-  // decreasing during the loop, it is guaranteed that y_hat[s | t] has already
-  // been computed, as s | t >= s regardless of s and t.
-  void ComputeCoefficients() {
-    cout << "Biased coefficients: "<< y.t();
-    // Because s is unsigned, it will roll over once decremented past 0.
-    for (Mask s = kNumCoefs - 1; s < kNumCoefs; s--) {
-      double sum = 0;
-      for (Mask t = 1; t <= kNumCoefs - 1; t++) {
-        if (t & s)  // t is not a subset of the complement of s.
-          continue;
-        sum += ComputeCCoefficient(s, t) * y_hat[s | t];
-      }
-      y_hat[s] = (y[s] - sum) / ComputeCCoefficient(s, 0);
-    }
-    cout << "Unbiased coefficients: " << y_hat.t();
-  }
-
-  // This function computes the value of c_s,t given s and t as bit masks. The
-  // value is then cache to avoid repeated computation.
-  double ComputeCCoefficient(Mask s, Mask t) {
-    // First check if the value has been computed.
-    HashType key = ((HashType) s << 32) + t;
-    auto it = c.find(key);
-    if (it != c.end()) {
-      cout << "Retrieved hashed value for s = " << s << " and t = " << t << endl;
-      cout << "Value is " << it->second;
-      return it->second;
-    }
-    // The value has not been computed.
-    double coef = 0;
-    cout << "computing coef: " << s << " " << t << endl;
-    for (Mask u = 0; u <= t; u++) {  // A bit mask representing the set u.
-      if (u & ~t)  // u is not a subset of t and we ignore this case.
-        continue;
-      cout << "u = " << u << endl;
-      // t is a subset of the complement of s, meaning they share no elements.
-      // u is a subset of T, meaning it and s share no elements. Hence, |u U s|
-      // is equivalent to |u| + |s|.
-      cout << "bits = " << (CountBits(u | s) % 2) << endl;
-      cout << "mult = " << (1 - 2 * (CountBits(u | s) % 2)) << endl;
-      cout << "b_su = " << b[s | u] << endl;
-      // This differs from the vldb paper which says the exponent is |s| + |u|.
-      // This is intentional as that is a typo. It should read |t \ u| which is
-      // equivalent to |t - u|, as u is a subset of t.
-      coef += (1 - 2 * (CountBits(t - u) % 2)) * b[s | u];
-      cout << "coef = " << coef << endl;
-    }
-    cout << "result: " << coef << endl << endl;;
-    c.insert(std::make_pair(key, coef));
-    return coef;
-  }
-
-  // This function computes the value of c_s given s as a bit mask. Unlike the
-  // previous function, no values are cached as each c_s is only needed once.
-  double ComputeCCoefficient(Mask s) {
-    cout << "computing c_s for s = " << s << endl;
-    double coef = 0;
-    for (Mask t = 0; t <= s; t++) {
-      if (t & ~s)  // t is not a subset of s.
-        continue;
-      // Because t is a subset of s, |t| + |s| = |s \ t| mod 2 because whichever
-      // element appears in t will appear in s as well. This means that such an
-      // element will be counted twice on the left hand side and therefore not
-      // affect the parity of the result.
-      cout << "t = " << t << endl;
-      cout << "bits = " << (CountBits(s - t) % 2) << endl;
-      cout << "mult = " << (1 - 2 * (CountBits(s - t) % 2)) << endl;
-      cout << "b_t = " << b[t] << endl;
-      cout << "change = " << (1 - 2 * (CountBits(s - t) % 2)) * b[t] << endl;
-      cout << "coef = " << coef << endl;
-      coef += (1 - 2 * (CountBits(s - t) % 2)) * b[t];
-      cout << "coef = " << coef << endl;
-    }
-    cout << "c_s: " << coef << " s: " << s << endl << endl;;
-    return coef;
-  }
-
-  // The bitwise-SWAR algorithm for computing the Hamming Weight of an integer.
-  int CountBits(Mask i) {
-     i = i - ((i >> 1) & 0x55555555);
-     i = (i & 0x33333333) + ((i >> 2) & 0x33333333);
-     return (((i + (i >> 4)) & 0x0F0F0F0F) * 0x01010101) >> 24;
   }
 };
 
