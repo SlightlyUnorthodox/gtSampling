@@ -1,4 +1,4 @@
-// This files contains the tools used to compute the various coefficients needed
+// This file contains the tools used to compute the various coefficients needed
 // for sampling estimates, namely the y_s, c_s, and c_st coefficients. For more
 // information, see http://www.vldb.org/pvldb/vol6/p1798-nirkhiwale.pdf.
 
