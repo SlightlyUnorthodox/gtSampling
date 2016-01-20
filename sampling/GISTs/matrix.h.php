@@ -100,13 +100,10 @@ class <?=$className?> {
   // The number of coefficients, 2 ^ kNumRelations.
   static const constexpr int kNumCoefs = <?=$numCoefs?>;
 
-  // The type used for the various arrays.
-  using Array = arma::vec::fixed<kNumCoefs>;
-
  private:
   // The GUS coefficients.
   double a;
-  Array b;
+  arma::vec::fixed<kNumCoefs> b;
 
   // The data structures used to hold the precomputed c coefficients.
   arma::mat::fixed<kNumCoefs, kNumCoefs> c_st;
