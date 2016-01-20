@@ -33,7 +33,7 @@ function Covariance($t_args, $outputs, $states)
 
     $sys_headers  = ['armadillo', 'math.h', 'unordered_map'];
     $user_headers = [];
-    $lib_headers  = ['coefs.h'];
+    $lib_headers  = ['coefs.h', 'base\HashFct.h', 'base\gist.h'];
     $libraries    = [];
     $extra        = [];
     $result_type  = [$outputCoefs ? 'multi' : 'single'];
@@ -42,53 +42,17 @@ function Covariance($t_args, $outputs, $states)
 using namespace std;
 using namespace arma;
 
-class AnswerGLA {
- private:
-  // Whether this GLA should iterate.
-  bool answer;
-
- public:
-  AnswerGLA(bool answer) : answer(answer) {}
-  void AddState(AnswerGLA other) {}
-  bool ShouldIterate() { return answer; }
-};
-
 class <?=$className?>;
 
 class <?=$className?> {
  public:
-  using Mask = uint32_t;
-  using Task = Mask;
-
-  struct LocalScheduler {
-    // The thread index of this scheduler.
-    int index;
-
-    // Whether this scheduler has scheduled its single task.
-    bool finished;
-
-    LocalScheduler(int index)
-        : index(index),
-          finished(false) {
-    }
-
-    bool GetNextTask(Task& task) {
-      bool ret = !finished;
-      // printf("Getting task from scheduler %d: %d\n", index, ret);
-      task = index;
-      finished = true;
-      return ret;
-    }
-  };
-
-  // The inner GLA being used.
-  using cGLA = AnswerGLA;
-
-  // The type of the workers.
-  using WorkUnit = pair<LocalScheduler*, cGLA*>;
-
-  // The type of the container for the workers.
+  // The various components for the GIST and Fragment result type.
+  using cGLA = HaltingGLA;
+  using Task = uint32_t;
+  using LocalScheduler = SimpleScheduler<Task>;
+  using WorkUnit = std::pair<LocalScheduler*, cGLA*>;
   using WorkUnits = std::vector<WorkUnit>;
+  using Iterator = std::tuple<int, int, bool>;
 
   // The type of GLA used for the sub-sampling.
   using XSamplingGLA = <?=$sample_x?>;
@@ -97,13 +61,10 @@ class <?=$className?> {
   using SampleY = YSamplingGLA::Sample;
 
   // The type on information being aggregated.
-  using Value = double;
-
-  // The type of the key hashing.
-  using HashType = uint64_t;
+  using Value = long double;
 
   // The type of mapping used to compute each coefficient.
-  using Map = std::unordered_map<HashType, Value>;
+  using Map = std::unordered_map<uint64_t, Value>;
 
   // The number of relations.
   static const constexpr int kNumRelations = <?=$numRelations?>;
@@ -138,6 +99,7 @@ class <?=$className?> {
     // Precomputing the coefficients.
     ComputeCoefficients(c_st, b);
     ComputeCoefficients(c_s, b);
+    cout << c_st << endl << c_s.t();
     // Combining the two samples.
     auto x = state_x.GetGLA1();
     auto y = state_y.GetGLA1();
@@ -155,12 +117,20 @@ class <?=$className?> {
     }
     // Adjust the GUS coefficients based on the Bernoulli sub-sample.
     double p = min(p_x, p_y);
-    for (Mask index = 0; index < kNumCoefs; index++)
+    cout << "p: " << p << endl;
+    cout << "a: " << a << endl;
+    cout << "b: " << b.t();
+    cout << "applying sub-sample transformation." << endl;
+    for (uint32_t index = 0; index < kNumCoefs; index++)
       b[index] *= pow(p, 2 - (double) CountBits(index) / kNumRelations);
     a *= p;
     cout << "a: " << a << endl;
     cout << "b: " << b.t();
     cout << "sample_x size: " << sample_x.size() << endl;
+    long sum1; double sum2;
+    state_x.GetGLA0().GetResult(sum1);
+    state_y.GetGLA0().GetResult(sum2);
+    cout << "sum_x: " << sum1 << endl << "sum_y: " << sum2 << endl;
   }
 
   // One worker per power set element S is allocate. This means that there are
@@ -168,7 +138,7 @@ class <?=$className?> {
   // single coefficient, Y_S. The value of S is encoded as a bit mask and stored
   // as an integer.
   void PrepareRound(WorkUnits& workers, int num_threads) {
-    for (Mask counter = 0; counter < kNumCoefs; counter++)
+    for (uint32_t counter = 0; counter < kNumCoefs; counter++)
       workers.push_back(WorkUnit(new LocalScheduler(counter), new cGLA(false)));
   }
 
@@ -210,18 +180,20 @@ class <?=$className?> {
   }
 <?  } else { ?>
   void GetResult(<?=typed_ref_args($outputs_)?>) {
+    cout << "biased: " << y.t();
     UnbiasCoefficients(y, c_st, b);
+    cout << "unbiased: " << y.t();
     covariance = 0;
-    for (Mask s = 0; s < kNumCoefs; s++)
+    for (uint32_t s = 0; s < kNumCoefs; s++)
       covariance += c_s(s) * y(s);
     covariance -= pow(a, 2) * y(0);
-    cout << "covariance: " << covariance << endl;\
+    cout << "covariance: " << covariance << endl;
   }
 <?  } ?>
 
  private:
   // This updates a map given a value and key.
-  void Update(Map& map, HashType key, Value value) {
+  void Update(Map& map, uint64_t key, Value value) {
     Map::iterator it = map.find(key);
     if (it == map.end()) {
       auto insertion = map.insert(Map::value_type(key, 0));
@@ -234,8 +206,8 @@ class <?=$className?> {
   // are to be used. It hashes each relevent key to a uint64_t and then uses a
   // chain hash to condense these hashed values into a single output. The mask
   // is used as the starting value for the chain hash.
-  HashType ChainHash(XSamplingGLA::KeySet keys, Mask mask) {
-    HashType result = mask;
+  uint64_t ChainHash(XSamplingGLA::KeySet keys, uint32_t mask) {
+    uint64_t result = mask;
 <?  for ($index = 0; $index < $numRelations; $index++) { ?>
     if (mask & 1 << <?=$index?>)
         result = CongruentHash(result, Hash(get<<?=$index?>>(keys)));
@@ -244,7 +216,7 @@ class <?=$className?> {
 <?  for ($index = 0; $index < $numRelations; $index++) { ?>
     //cout << get<<?=$index?>>(keys) << " ";
 <?  } ?>
-    //cout << endl << "Mask: " << mask << " Result: " << result << endl;
+    //cout << endl << "uint32_t: " << mask << " Result: " << result << endl;
     return result;
   }
 };
