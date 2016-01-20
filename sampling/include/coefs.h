@@ -75,12 +75,14 @@ template <uint32_t N>
 inline void UnbiasCoefficients(arma::vec::fixed<N>& y_s,
                                const arma::mat::fixed<N, N>& c_st,
                                const arma::vec::fixed<N>& b) {
-  for (uint32_t s = N; s < N; s--) {
+  std::cout << "in function biased: " << y_s.t();
+  for (uint32_t s = N - 1; s < N; s--) {  // s will rollover.
     for (uint32_t t = 1; t < N; t++)
       if (t & s)  // t is not a subset of the complement of s.
         continue;
       else
         y_s(s) -= c_st(s, t) * y_s[s | t];
-    y_s(s) /= ComputeCCoefficient(s, 0);
+    y_s(s) /= c_st(s, 0);
   }
+  std::cout << "in function unbiased: " << y_s.t();
 }
