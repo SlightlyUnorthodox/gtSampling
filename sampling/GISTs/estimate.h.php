@@ -62,8 +62,6 @@ function Estimate($t_args, $outputs, $states)
     $glas   = $input->get('glas');
     $mean   = array_get_index($glas, 0);
     $sample = array_get_index($glas, 1);
-    $inputs = $sample->input();
-    $keys   = array_slice($inputs, 0, -1);
 
     // Processing of outputs.
     $outputs = array_fill_keys(array_keys($outputs), lookupType('double'));
@@ -77,7 +75,7 @@ function Estimate($t_args, $outputs, $states)
 
     $sys_headers  = ['armadillo', 'math.h', 'unordered_map'];
     $user_headers = [];
-    $lib_headers  = [];
+    $lib_headers  = ['coefs.h', 'tools.h', 'base\gist.h'];
     $libraries    = [];
     $extra        = [];
     $result_type  = [$outputCoefs ? 'multi' : 'single'];
@@ -86,65 +84,24 @@ function Estimate($t_args, $outputs, $states)
 using namespace std;
 using namespace arma;
 
-class AnswerGLA {
- private:
-  // Whether this GLA should iterate.
-  bool answer;
-
- public:
-  AnswerGLA(bool answer) : answer(answer) {}
-  void AddState(AnswerGLA other) {}
-  bool ShouldIterate() { return answer; }
-};
-
 class <?=$className?>;
 
 class <?=$className?> {
  public:
-  using Mask = uint32_t;
-  using Task = Mask;
+  // The various components for the GIST and Fragment result type.
+  using cGLA = HaltingGLA;
+  using Task = uint32_t;
+  using LocalScheduler = SimpleScheduler<Task>;
+  using WorkUnit = std::pair<LocalScheduler*, cGLA*>;
+  using WorkUnits = std::vector<WorkUnit>;
 
-  struct LocalScheduler {
-    // The thread index of this scheduler.
-    int index;
-
-    // Whether this scheduler has scheduled its single task.
-    bool finished;
-
-    LocalScheduler(int index)
-        : index(index),
-          finished(false) {
-    }
-
-    bool GetNextTask(Task& task) {
-      bool ret = !finished;
-      // printf("Getting task from scheduler %d: %d\n", index, ret);
-      task = index;
-      finished = true;
-      return ret;
-    }
-  };
-
-  // The inner GLA being used.
-  using cGLA = AnswerGLA;
-
-  // The type of the workers.
-  using WorkUnit = pair<LocalScheduler*, cGLA*>;
-
-  // The type of the container for the workers.
-  using WorkUnits = vector<WorkUnit>;
-
-  // The type of GLA used for the sub-sampling.
+  // The GLA and container used for the sub-sampling.
   using SamplingGLA = <?=$sample?>;
-
-  // The type on information being aggregated.
-  using Value = double;
-
-  // The type of the key hashing.
-  using HashType = uint64_t;
+  using Sample = SamplingGLA::Sample;
+  using Value = SamplingGLA::Value;
 
   // The type of mapping used to compute each coefficient.
-  using Map = std::unordered_map<HashType, Value>;
+  using Map = std::unordered_map<uint64_t, Value>;
 
   // The number of relations.
   static const constexpr int kNumRelations = <?=$numRelations?>;
@@ -152,27 +109,20 @@ class <?=$className?> {
   // The number of coefficients, 2 ^ kNumRelations.
   static const constexpr int kNumCoefs = <?=$numCoefs?>;
 
-  // The type used for the various arrays.
-  using Array = arma::vec::fixed<kNumCoefs>;
-
  private:
-  // The GLA that performed the sub-sampling.
-  SamplingGLA sample;
+  // The sample's sum of the property whose total sum is being estimated.
+  Value sum;
 
-  // The size of the sub-sample.
-  long size;
+  // The GLA that performed the sub-sampling.
+  Sample sample;
 
   // The GUS probability coefficient.
   double a;
 
-  // The GUS, sample, and unbiased coefficients.
-  Array b, y, y_hat;
-
-  // The sample's sum of the property whose sum is being estimated.
-  Value sum;
-
-  // A hash map containing the c_s,t coefficients.
-  Map c;
+  // Containers for the various coefficients
+  arma::vec::fixed<kNumCoefs> b, y;
+  arma::mat::fixed<kNumCoefs, kNumCoefs> c_st;
+  arma::vec::fixed<kNumCoefs> c_s;
 
 <?  if ($outputCoefs) { ?>
   // The index used for the multi-type result.
@@ -181,22 +131,25 @@ class <?=$className?> {
 
  public:
   <?=$className?>(<?=const_typed_ref_args($states_)?>)
-      : sample(input.GetGLA1()),
-        size(sample.GetSize()),
+      : sample(input.GetGLA1().GetSample()),
         a(<?=$a?>),
         b({<?=$bElems?>}) {
+    // Copyiny the value of the total sum.
     input.GetGLA0().GetResult(sum);
+    sum /= a;
+    // Precomputing the coefficients.
+    ComputeCoefficients(c_st, b);
+    ComputeCoefficients(c_s, b);
     // Adjust the GUS coefficients based on the Bernoulli sub-sample.
-    double p = sample.GetProbability();
-    for (Mask index = 0; index < kNumCoefs; index++)
-      b[index] *= pow(p, 2 - (double) CountBits(index) / kNumRelations);
-    a *= p;
+    double p = input.GetGLA1().GetProbability();
+    for (uint32_t index = 0; index < kNumCoefs; index++)
+      b[index] *= pow(p, 2 * kNumRelations - CountBits(index));
+    a *= pow(p, kNumRelations);
     cout << "a: " << a << endl;
     cout << "b: " << b.t();
     cout << "sum: " << sum << endl;
-    cout << "size: " << size << endl;
     cout << "sample: " << endl;
-    for (auto item : sample.GetSample())
+    for (auto item : sample)
       cout << get<0>(item.first) << " " << get<1>(item.first) << " " << item.second << endl;
   }
 
@@ -205,21 +158,16 @@ class <?=$className?> {
   // single coefficient, Y_S. The value of S is encoded as a bit mask and stored
   // as an integer.
   void PrepareRound(WorkUnits& workers, int num_threads) {
-    for (Mask counter = 0; counter < kNumCoefs; counter++)
-      workers.push_back(WorkUnit(new LocalScheduler(counter), new cGLA(false)));
+    for (uint32_t counter = 0; counter < kNumCoefs; counter++)
+      workers.push_back(WorkUnit(new LocalScheduler(counter), new cGLA()));
   }
 
   void DoStep(Task& task, cGLA& gla) {
-    Map map(size);
-    for (auto item : sample.GetSample()) {
-      HashType key = ChainHash(item.first, task);
-      Map::iterator it = map.find(key);
-      if (it == map.end()) {
-        auto insertion = map.insert(Map::value_type(key, 0));
-        it = insertion.first;
-      }
-      it->second += item.second;
-    }
+    Map map(sample.size());
+
+    for (auto item : sample)
+      Update(map, ChainHash(item.first, task), item.second);
+
     cout << "Task: " << task << " Num Groups: " << map.size() << endl;
     for (auto group : map)
       y[task] += pow(group.second, 2);
@@ -228,70 +176,33 @@ class <?=$className?> {
 <?  if ($outputCoefs) { ?>
   void Finalize() {
     index = 0;
-    ComputeCoefficients();
+    UnbiasCoefficients(y, c_st);
   }
 
   bool GetNextResult(<?=typed_ref_args($outputs_)?>) {
     if (index == kNumCoefs)
       return false;
     s = index;
-    y_s = y_hat[s];
-    c_s = ComputeCCoefficient(s);
+    y_s = y(s);
+    c_s = c_s(s);
     a = a;
-    b_s = b[s];
+    b_s = b(s);
     index++;
     return true;
   }
 <?  } else { ?>
   void GetResult(<?=typed_ref_args($outputs_)?>) {
-    ComputeCoefficients();
-    exp_val = sum / a;
+    UnbiasCoefficients(y, c_st);
+    exp_val = sum;
     variance = 0;
-    for (Mask s = 0; s < kNumCoefs; s++)
-      variance += ComputeCCoefficient(s) * y_hat[s];
+    for (uint32_t s = 0; s < kNumCoefs; s++)
+      variance += c_s(s) * y(s);
     variance /= pow(a, 2);
-    variance -= y_hat[0];
+    variance -= y(0);
     cout << "variance: " << variance << endl;
     cout << "exp_val: " << exp_val << endl;
   }
 <?  } ?>
-
- private:
-  // This function takes in a set of keys and a bit mask specifying which keys
-  // are to be used. It hashes each relevent key to a uint64_t and then uses a
-  // chain hash to condense these hashed values into a single output. The mask
-  // is used as the starting value for the chain hash.
-  HashType ChainHash(SamplingGLA::KeySet keys, Mask mask) {
-    HashType result = mask;
-<?  for ($index = 0; $index < $numRelations; $index++) { ?>
-    if (mask & 1 << <?=$index?>)
-        result = CongruentHash(result, Hash(get<<?=$index?>>(keys)));
-<?  } ?>
-    //cout << "Keys: ";
-<?  for ($index = 0; $index < $numRelations; $index++) { ?>
-    //cout << get<<?=$index?>>(keys) << " ";
-<?  } ?>
-    //cout << endl << "Mask: " << mask << " Result: " << result << endl;
-    return result;
-  }
-
-  // This function computes the values of y_hat based on y. Because the mask is
-  // decreasing during the loop, it is guaranteed that y_hat[s | t] has already
-  // been computed, as s | t >= s regardless of s and t.
-  void ComputeCoefficients() {
-    cout << "Biased coefficients: "<< y.t();
-    // Because s is unsigned, it will roll over once decremented past 0.
-    for (Mask s = kNumCoefs - 1; s < kNumCoefs; s--) {
-      double sum = 0;
-      for (Mask t = 1; t <= kNumCoefs - 1; t++) {
-        if (t & s)  // t is not a subset of the complement of s.
-          continue;
-        sum += ComputeCCoefficient(s, t) * y_hat[s | t];
-      }
-      y_hat[s] = (y[s] - sum) / ComputeCCoefficient(s, 0);
-    }
-    cout << "Unbiased coefficients: " << y_hat.t();
-  }
 };
 
 <?

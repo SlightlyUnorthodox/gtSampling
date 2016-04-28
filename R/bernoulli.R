@@ -1,4 +1,4 @@
-Bernoulli <- function(data, p, inputs, seed, rng = "mt19937_64") {
+Bernoulli <- function(data, p, inputs, seed = NA, rng = "mt19937_64") {
   if (missing(inputs)) {
     gf <- GF(BernoulliSample, p = p, rng = rng)
     Filter(data, gf)

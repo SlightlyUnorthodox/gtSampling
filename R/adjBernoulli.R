@@ -1,4 +1,5 @@
-AdjBernoulli <- function(data, keys, value, outputs, min = 10^6, max = 4 * min) {
+AdjBernoulli <- function(data, keys, value, outputs, min = 10^5, max = 4 * min,
+                         seed = NA) {
   keys <- convert.exprs(substitute(keys))
   value <- convert.exprs(substitute(value))
   inputs <- c(keys, value)
@@ -17,9 +18,6 @@ AdjBernoulli <- function(data, keys, value, outputs, min = 10^6, max = 4 * min) 
       warning("both outputs and named inputs given. outputs used.")
     outputs <- convert.atts(substitute(outputs))
   }
-
-  ## Randomly generate the seed
-  seed <- as.integer(runif(1, 0, 10^9))
 
   GLA <- GLA(sampling::Adjustable_Bernoulli, minimum = min, maximum = max,
              increase = 1.5, decrease = 2, seed = seed)

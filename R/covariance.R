@@ -1,5 +1,5 @@
 ## shared should be a character vector mapping aliases from state 1 to state 2.
-Covariance <- function(states, keys, value1, value2, outputs, shared) {
+Covariance <- function(states, keys, value1, value2, outputs, shared, min = 10^5, foreign.key = FALSE) {
   ## Examining the query tree. The inputs are labelled x and y.
   x <- states[[1]]
   y <- states[[2]]
@@ -37,6 +37,10 @@ Covariance <- function(states, keys, value1, value2, outputs, shared) {
       } else if (op == "GF") {
         p = waypoint$gf$args$p
         list(a = p, b = c(p * p, p))
+      } else {
+        ## This branch is used to keep the precomputed GUS operators, such as
+        ## those set by MarkSample.
+        waypoint$gus
       }
 
     input <-
@@ -63,15 +67,16 @@ Covariance <- function(states, keys, value1, value2, outputs, shared) {
   ## output of the summation to avoid name clashing.
   mean1 <- call("Sum", value1, substitute(junk))
   mean2 <- call("Sum", value2, substitute(junk))
-  sample1 <- call("AdjBernoulli", keys, value1)
-  sample2 <- call("AdjBernoulli", keys, value2)
+  seed <- as.integer(runif(1) * 2^31)
+  sample1 <- call("AdjBernoulli", keys, value1, seed = seed, min = min)
+  sample2 <- call("AdjBernoulli", keys, value2, seed = seed, min = min)
 
   x <- do.call("Multiplexer", list(quote(x), mean1, sample1))
   y <- do.call("Multiplexer", list(quote(y), mean2, sample2))
 
   outputs <- convert.atts(substitute(outputs))
 
-  GIST <- GIST(sampling::Covariance, a = gus$a, b = gus$b)
+  GIST <- GIST(sampling::Covariance, a = gus$a, b = gus$b, foreign.key)
   Transition(GIST, outputs, list(x, y))
 }
 
@@ -138,7 +143,8 @@ ComputeGUS <- function(x, y) {
 ## Compresses GUSs that are in the same branch
 Compress <- function(x) {
   if (x$op %in% c("Load", "GI")) {
-    x$gus <- list(a = 1, b = c(1, 1))
+    if (is.null(x$gus))
+        x$gus <- list(a = 1, b = c(1, 1))
     c(x, finished = TRUE)
   } else {
     ## Everything other than a Load or a GI has input.

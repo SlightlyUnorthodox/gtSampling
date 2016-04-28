@@ -46,6 +46,7 @@ function Covariance_Matrix($t_args, $outputs, $states)
     // Processing of template arguments.
     $a = $t_args['a'];
     $b = $t_args['b'];
+    $foreignKey = $t_args['foreign.key'];
 
     $numCoefs     = count($b);
     $numRelations = log($numCoefs, 2);
@@ -62,10 +63,10 @@ function Covariance_Matrix($t_args, $outputs, $states)
 
     $sys_headers  = ['armadillo', 'math.h', 'unordered_map'];
     $user_headers = [];
-    $lib_headers  = ['base\gist.h'];
+    $lib_headers  = ['base\gist.h', 'coefs.h', 'tools.h'];
     $libraries    = [];
     $extra        = [];
-    $result_type  = ['fragment'];
+    $result_type  = ['multi'];
 ?>
 
 using namespace std;
@@ -128,70 +129,87 @@ class <?=$className?> {
   // The container for the final results of the resampling.
   std::vector<Sample> samples;
 
+  // The probabilities for the various sub-samples.
+  arma::vec p_vec;
+
+  // The iterator for the multi return type.
+  Iterator multi_it;
+
+  arma::wall_clock timer;
+
  public:
   <?=$className?>(<?=const_typed_ref_args($states_)?>)
       : a(<?=$a?>),
         b({<?=$bElems?>}),
-        p(1),
         round(0),
         num_groups(state.GetMap().size()),
         sums(num_groups),
         keys(num_groups),
         sub_samples(num_groups),
-        samples(num_groups) {
+        samples(num_groups),
+        p_vec(num_groups) {
+    timer.tic();
     // Traversing the sub-samples and computing the minimum probability.
     int index = 0;
     for (auto it = state.GetMap().begin(); it != state.GetMap().end(); ++it) {
-      p = min(p, it->second.GetProbability());
+      cout << "sample " << index << " size: " << it->second.GetSample().size() << endl;
+      p_vec(index) = it->second.GetProbability();
       keys[index] = it->first.GetKey0();
       sub_samples[index++] = &it->second.GetSample();
     }
-    cout << "min probability: " << p << endl;
+    p = p_vec.min();
+    cout << "probabilities: " << endl << p_vec.t() << endl;
+    cout << "p: " << p << endl;
+    cout << "a: " << a << endl;
+    cout << "b: " << b.t();
+    cout << "applying sub-sample transformation." << endl;
     // Adjust the GUS coefficients based on the Bernoulli sub-sample.
     for (uint32_t index = 0; index < kNumCoefs; index++)
-      b[index] *= pow(p, 2 - (double) CountBits(index) / kNumRelations);
-    a *= p;
-    // Precomputing the c coefficients.
-    for (uint32_t s = 0; s < kNumCoefs; s++) {
-      c_s(s) = ComputeCCoefficient(s);
-      for (uint32_t t = 0; t < kNumCoefs; t++)
-        if (t & s)
-          continue;
-        else
-          c_st(s, t) = ComputeCCoefficient(s, t);
-    }
+      b[index] *= pow(p, 2 * kNumRelations - CountBits(index));
+    a *= pow(p, kNumRelations);
+    cout << "a: " << a << endl;
+    cout << "b: " << b.t();
+    // Precomputing the coefficients.
+    ComputeCoefficients(c_st, b);
+    ComputeCoefficients(c_s, b);
     // This is done to account for the offset when computing the covariance. Now
     // the covariance is simply the dot product of the c and y coefficients.
     c_s(0) -= a * a;
-    cout << "c_s: " << c_s.t();
-    cout << "c_s,t: " << c_st;
+    cout << "c_s: " << endl << c_s.t();
+    cout << "c_s,t: " << endl << c_st;
   }
 
   // In both rounds, one worker per group is allocated.
   void PrepareRound(WorkUnits& workers, int num_threads) {
-    round++;
+    bool done = ++round == 1;
+    cout << "Scheduling round: " << round << endl;
     for (uint32_t counter = 0; counter < num_groups; counter++)
-      workers.push_back(WorkUnit(new LocalScheduler(counter),
-                                 new cGLA(round == 1)));
+      workers.push_back(WorkUnit(new LocalScheduler(counter), new cGLA(done)));
   }
 
   // In the first round
   void DoStep(Task& task, cGLA& gla) {
     if (round == 1) {
-      SamplingGLA::Refilter(samples[task], *sub_samples[task], p);
-      cout << "sample " << task << " size: " << samples[task].size() << endl;
-    } else
+        SamplingGLA::Refilter(samples[task], *sub_samples[task], p);
+    } else {
       // The various sums need for the final coefficients are computed.
+      cout << "Task " << task << " has " << samples[task].size() << " elements." << endl;
       for (uint32_t mask = 0; mask < kNumCoefs; mask++) {
+<?  if ($foreignKey) { ?>
+        if (mask >= 2)
+          continue;
+<?  } ?>
         for (auto item : samples[task])
-          Update(sums[mask][task], ChainHash(item.first, task), item.second);
-        cout << "task: " << task << " mask: " << mask << " size: " << sums[mask][task].size() << endl;
+          Update(sums[task][mask], ChainHash(item.first, mask), item.second);
       }
+      cout << "finished task: " << task << endl;
+    }
   }
 
   // One fragment per distinct pair is allocated, including pairs of the same
   // group because their covariance is then the variance and not trivial.
   int GetNumFragments() {
+    cout << "TIME TAKEN FOR COEFFICIENTS: " << timer.toc() << endl;
     return num_groups * (num_groups + 1) / 2;
   }
 
@@ -209,94 +227,54 @@ class <?=$className?> {
     if (std::get<2>(*it))  // The result has already been returned.
       return false;
     // This container holds both biased and unbiased coefficients.
+    cout <<"Starting entry: " << get<0>(*it) << " " << get<1>(*it) << endl;
     arma::vec::fixed<kNumCoefs> y(arma::fill::zeros);
     // Computing the pairwise product.
     for (uint32_t mask = 0; mask < kNumCoefs; mask++) {
-      auto& map_1 = sums[mask][get<0>(*it)];
-      auto& map_2 = sums[mask][get<1>(*it)];
+<?  if ($foreignKey) { ?>
+      if (mask >= 2)
+        continue;
+<?  } ?>
+      auto& map_1 = sums[get<0>(*it)][mask];
+      auto& map_2 = sums[get<1>(*it)][mask];
       for (auto item_1 : map_1) {
         auto item_2 = map_2.find(item_1.first);
         if (item_2 != map_2.end())
           y(mask) += item_1.second * item_2->second;
       }
     }
-    // cout << get<0>(*it) << " " << get<1>(*it) << " biased: " << y.t();
-    // Unbiasing the Y_s coefficients.
-    for (uint32_t s = kNumCoefs - 1; s < kNumCoefs; s--) {
-      for (uint32_t t = 1; t <= kNumCoefs - 1; t++) {
-        if (t & s)  // t is not a subset of the complement of s.
-          continue;
-        y(s) -= ComputeCCoefficient(s, t) * y[s | t];
-      }
-      y(s) /= ComputeCCoefficient(s, 0);
-    }
-    // cout << get<0>(*it) << " " << get<1>(*it) << " unbiased: " << y.t();
+<?  if ($foreignKey) { ?>
+    y.subvec(2, y.n_elem - 1).fill(y(1));
+<?  } ?>
+    cout << "  biased: " << y.t();
+    UnbiasCoefficients(y, c_st);
+    cout << "unbiased: " << y.t();
     // Returning the values.
     f = keys[std::get<0>(*it)];
     g = keys[std::get<1>(*it)];
     cov = dot(y, c_s);
     std::get<2>(*it) = true;
+    cout << "Returned entry for matrix." << get<0>(*it) << " " << get<1>(*it) << endl;
+    cout << "TIME TAKEN FOR RESULTS: " << timer.toc() << endl;
     return true;
   }
 
- private:
-  // This updates a map given a value and key.
-  void Update(Map& map, uint64_t key, Value value) {
-    Map::iterator it = map.find(key);
-    if (it == map.end()) {
-      auto insertion = map.insert(Map::value_type(key, 0));
-      it = insertion.first;
+  void Finalize() {
+    multi_it = std::make_tuple(0, 0, false);
+  }
+
+  bool GetNextResult(<?=typed_ref_args($outputs_)?>) {
+    if (std::get<0>(multi_it) == num_groups)
+      return false;
+    GetNextResult(&multi_it, <?=args($outputs_)?>);
+    std::get<2>(multi_it) = false;
+    if (std::get<0>(multi_it) == std::get<1>(multi_it)) {
+      std::get<0>(multi_it)++;
+      std::get<1>(multi_it) = 0;
+    } else {
+      std::get<1>(multi_it)++;
     }
-    it->second += value;
-  }
-
-  // This function takes in a set of keys and a bit mask specifying which keys
-  // are to be used. It hashes each relevent key to a uint64_t and then uses a
-  // chain hash to condense these hashed values into a single output. The mask
-  // is used as the starting value for the chain hash.
-  uint64_t ChainHash(SamplingGLA::KeySet keys, uint32_t mask) {
-    uint64_t result = mask;
-<?  for ($index = 0; $index < $numRelations; $index++) { ?>
-    if (mask & 1 << <?=$index?>)
-        result = CongruentHash(result, Hash(get<<?=$index?>>(keys)));
-<?  } ?>
-    return result;
-  }
-
-  // This function computes the value of c_s,t given s and t as bit masks.
-  double ComputeCCoefficient(uint32_t s, uint32_t t) {
-    double coef = 0;
-    for (uint32_t u = 0; u <= t; u++) {  // A bit mask representing the set u.
-      if (u & ~t)  // u is not a subset of t and we ignore this case.
-        continue;
-      // This differs from the vldb paper which says the exponent is |s| + |u|.
-      // This is intentional as that is a typo. It should read |t \ u| which is
-      // equivalent to |t - u|, as u is a subset of t.
-      coef += (1 - 2 * (int) (CountBits(t - u) % 2)) * b[s | u];
-    }
-    return coef;
-  }
-
-  // This function computes the value of c_s given s as a bit mask.
-  double ComputeCCoefficient(uint32_t s) {
-    double coef = 0;
-    for (uint32_t t = 0; t <= s; t++) {
-      if (t & ~s)  // t is not a subset of s.
-        continue;
-      // Because t is a subset of s, |t| + |s| = |s \ t| mod 2 because whichever
-      // element appears in t will appear in s as well. This means that such an
-      // element will be counted twice on the left hand side and therefore not
-      // affect the parity of the result.
-      coef += (1 - 2 * (int) (CountBits(s - t) % 2)) * b[t];
-    }
-    return coef;
-  }
-
-  // The bitwise-SWAR algorithm for computing the Hamming Weight of an integer.
-  uint32_t CountBits(uint32_t i) {
-     i = i - ((i >> 1) & 0x55555555);
-     i = (i & 0x33333333) + ((i >> 2) & 0x33333333);
-     return (((i + (i >> 4)) & 0x0F0F0F0F) * 0x01010101) >> 24;
+    return true;
   }
 };
 

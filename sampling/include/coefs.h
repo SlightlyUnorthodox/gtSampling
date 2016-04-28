@@ -3,7 +3,7 @@
 // information, see http://www.vldb.org/pvldb/vol6/p1798-nirkhiwale.pdf.
 
 // Resources:
-//   armadillo: matrix and vector containers.
+// armadillo: matrix and vector containers.
 
 
 // The bitwise-SWAR algorithm for computing the Hamming Weight of an integer.
@@ -73,9 +73,7 @@ inline void ComputeCoefficients(arma::vec::fixed<N>& c_s,
 // unbiased, as s | t >= s regardless of s and t.
 template <uint32_t N>
 inline void UnbiasCoefficients(arma::vec::fixed<N>& y_s,
-                               const arma::mat::fixed<N, N>& c_st,
-                               const arma::vec::fixed<N>& b) {
-  std::cout << "in function biased: " << y_s.t();
+                               const arma::mat::fixed<N, N>& c_st) {
   for (uint32_t s = N - 1; s < N; s--) {  // s will rollover.
     for (uint32_t t = 1; t < N; t++)
       if (t & s)  // t is not a subset of the complement of s.
@@ -84,5 +82,4 @@ inline void UnbiasCoefficients(arma::vec::fixed<N>& y_s,
         y_s(s) -= c_st(s, t) * y_s[s | t];
     y_s(s) /= c_st(s, 0);
   }
-  std::cout << "in function unbiased: " << y_s.t();
 }

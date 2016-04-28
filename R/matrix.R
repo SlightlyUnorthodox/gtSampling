@@ -19,10 +19,11 @@
 #'   the overall query. Each expression should represent a key for the
 #'   corresponding relation.
 CovarianceMatrix <- function(interior, exterior, inAtts, exAtts,
-                             group, keys, value, outputs) {
+                             group, keys, value, outputs,
+                             foreign.key = FALSE) {
   ## The join is performed first.
-  data <- do.call("Join", list(substitute(interior), substitute(inAtts),
-                               substitute(exterior), substitute(exAtts)))
+  data <- do.call("Join", list(interior, substitute(inAtts),
+                               exterior, substitute(exAtts)))
 
   ## The necessary GUS coefficients are computed for each branch.
   b <- CompressGUS(interior)$b
@@ -47,7 +48,7 @@ CovarianceMatrix <- function(interior, exterior, inAtts, exAtts,
   outputs <- convert.atts(substitute(outputs))
 
   data <- do.call("GroupBy", list(quote(data), group, sample))
-  GIST <- GIST(sampling::Covariance_Matrix, a = gus$a, b = gus$b)
+  GIST <- GIST(sampling::Covariance_Matrix, a = gus$a, b = gus$b, foreign.key)
   Transition(GIST, outputs, data)
 }
 
@@ -57,8 +58,16 @@ CompressGUS.default <- function(waypoint)
   stop("unsupported waypoint used in sampling query. class: ",
        paste(class(waypoint), collapse = ", "))
 
-CompressGUS.GI <- CompressGUS.Load <- function(waypoint) list(a = 1, b = c(1, 1))
+## Use a presasigned GUS if there is one. Otherwise, the default GUS is one
+## without sampling.
+CompressGUS.GI <- CompressGUS.Load <- function(waypoint) {
+  if (is.null(gus <- waypoint$gus))
+    list(a = 1, b = c(1, 1))
+  else
+    gus
+}
 
+## These waypoints only pass through their GUS.
 CompressGUS.Generated <- CompressGUS.Cache <- CompressGUS.Filter <- function(waypoint)
   CompressGUS(waypoint$data)
 

@@ -16,27 +16,46 @@ function Covariance($t_args, $outputs, $states)
     $numRelations = log($numCoefs, 2);
     $bElems       = implode(', ', $b);
 
+    $foreignKey = $t_args['foreign.key'];
+
     // Processing of input states.
     $states_  = array_combine(['state_x', 'state_y'], $states);
     $sample_x = array_get_index($states_['state_x']->get('glas'), 1);
     $sample_y = array_get_index($states_['state_y']->get('glas'), 1);
+    $type_x = array_get_index(array_get_index($states_['state_x']->get('glas'), 0)->output(), 0);
+    $type_y = array_get_index(array_get_index($states_['state_y']->get('glas'), 0)->output(), 0);
 
     // Processing of outputs.
     $outputs = array_fill_keys(array_keys($outputs), lookupType('double'));
-    if (count($outputs) == 1) {
-        $outputs_ = array_combine(['covariance'], $outputs);
-        $outputCoefs = false;
-    } else {
-        $outputs_ = array_combine(['s', 'y_s', 'c_s', 'a', 'b_s'], $outputs);
-        $outputCoefs = true;
+    $count = count($outputs);
+    $outputVariance = $count >= 3;
+    $outputMean = $count >= 5;
+    $outputStat = $count >= 8;
+    switch($count) {
+    case 1:
+        $names = ['covariance'];
+        break;
+    case 3:
+        $names = ['covariance', 'var_x', 'var_y'];
+        break;
+    case 5:
+        $names = ['covariance', 'var_x', 'var_y', 'mean_x', 'mean_y'];
+        break;
+    case 8:
+        $names = ['covariance', 'var_x', 'var_y', 'mean_x', 'mean_y', 'time', 'x_count', 'y_count'];
+        break;
+    default:
+        grokit_error("$count inputs given to sampling\covariance GIST");
+        break;
     }
+    $outputs_ = array_combine($names, $outputs);
 
     $sys_headers  = ['armadillo', 'math.h', 'unordered_map'];
     $user_headers = [];
-    $lib_headers  = ['coefs.h', 'base\HashFct.h', 'base\gist.h'];
+    $lib_headers  = ['coefs.h', 'tools.h', 'base\gist.h'];
     $libraries    = [];
     $extra        = [];
-    $result_type  = [$outputCoefs ? 'multi' : 'single'];
+    $result_type  = ['single'];
 ?>
 
 using namespace std;
@@ -52,19 +71,15 @@ class <?=$className?> {
   using LocalScheduler = SimpleScheduler<Task>;
   using WorkUnit = std::pair<LocalScheduler*, cGLA*>;
   using WorkUnits = std::vector<WorkUnit>;
-  using Iterator = std::tuple<int, int, bool>;
 
-  // The type of GLA used for the sub-sampling.
+  // The GLA and container used for the sub-sampling.
   using XSamplingGLA = <?=$sample_x?>;
   using YSamplingGLA = <?=$sample_y?>;
   using SampleX = XSamplingGLA::Sample;
   using SampleY = YSamplingGLA::Sample;
 
-  // The type on information being aggregated.
-  using Value = long double;
-
   // The type of mapping used to compute each coefficient.
-  using Map = std::unordered_map<uint64_t, Value>;
+  using Map = std::unordered_map<uint64_t, long double>;
 
   // The number of relations.
   static const constexpr int kNumRelations = <?=$numRelations?>;
@@ -80,31 +95,45 @@ class <?=$className?> {
   // The GUS probability coefficient.
   double a;
 
-  // The GUS, sample, and unbiased coefficients.
+  // Containers for the various coefficients
   arma::vec::fixed<kNumCoefs> b, y;
-
-  // Containers for the precomputed c coefficients.
   arma::vec::fixed<kNumCoefs> c_s;
   arma::mat::fixed<kNumCoefs, kNumCoefs> c_st;
 
-<?  if ($outputCoefs) { ?>
-  // The index used for the multi-type result.
-  int index;
+<?  if ($outputVariance) { ?>
+  // Containers for the y_s terms for the variances.
+  arma::vec::fixed<kNumCoefs> y_x, y_y;
+
+<?      if ($outputMean) { ?>
+  // The sum of the sampled values.
+  <?=$type_x?> sum_x;
+  <?=$type_y?> sum_y;
+<?      } ?>
 <?  } ?>
+
+<?  if ($outputStat) { ?>
+  long count_x, count_y;
+<?  } ?>
+
+  arma::wall_clock timer;
 
  public:
   <?=$className?>(<?=const_typed_ref_args($states_)?>)
       : a(<?=$a?>),
         b({<?=$bElems?>}) {
-    // Precomputing the coefficients.
-    ComputeCoefficients(c_st, b);
-    ComputeCoefficients(c_s, b);
-    cout << c_st << endl << c_s.t();
+    timer.tic();
     // Combining the two samples.
     auto x = state_x.GetGLA1();
     auto y = state_y.GetGLA1();
     auto p_x = x.GetProbability();
     auto p_y = y.GetProbability();
+    cout << "p_x: " << p_x << " p_y: " << p_y << endl;
+    cout << "sample_x size: " << x.GetSample().size() << endl;
+    cout << "sample_y size: " << y.GetSample().size() << endl;
+    // for (auto item : x.GetSample())
+    //   cout << "Keys: " << item.first << " Value: " << item.second << endl;
+    // for (auto item : y.GetSample())
+    //   cout << "Keys: " << item.first << " Value: " << item.second << endl;
     if (p_x < p_y) {
       sample_x = x.GetSample();
       YSamplingGLA::Refilter(sample_y, y.GetSample(), p_x);
@@ -115,6 +144,17 @@ class <?=$className?> {
       sample_x = x.GetSample();
       sample_y = y.GetSample();
     }
+<?  if ($outputMean) { ?>
+    state_x.GetGLA0().GetResult(sum_x);
+    state_y.GetGLA0().GetResult(sum_y);
+    cout << "sum_x: " << sum_x << endl << "sum_y: " << sum_y << endl;
+    sum_x /= a;
+    sum_y /= a;
+<?  } ?>
+<?  if ($outputStat) { ?>
+    count_x = x.GetCount();
+    count_y = y.GetCount();
+<?  } ?>
     // Adjust the GUS coefficients based on the Bernoulli sub-sample.
     double p = min(p_x, p_y);
     cout << "p: " << p << endl;
@@ -122,15 +162,20 @@ class <?=$className?> {
     cout << "b: " << b.t();
     cout << "applying sub-sample transformation." << endl;
     for (uint32_t index = 0; index < kNumCoefs; index++)
-      b[index] *= pow(p, 2 - (double) CountBits(index) / kNumRelations);
-    a *= p;
+      b[index] *= pow(p, 2 * kNumRelations - CountBits(index));
+    a *= pow(p, kNumRelations);
     cout << "a: " << a << endl;
     cout << "b: " << b.t();
     cout << "sample_x size: " << sample_x.size() << endl;
-    long sum1; double sum2;
-    state_x.GetGLA0().GetResult(sum1);
-    state_y.GetGLA0().GetResult(sum2);
-    cout << "sum_x: " << sum1 << endl << "sum_y: " << sum2 << endl;
+    cout << "sample_y size: " << sample_y.size() << endl;
+    // b = arma::vec({2.5e-05,5.0e-05,2.5e-04,5.0e-04,2.5e-04,5.0e-04,2.5e-03,5.0e-03});
+    // Precomputing the coefficients.
+    ComputeCoefficients(c_st, b);
+    ComputeCoefficients(c_s, b);
+    // This is done to account for the offset when computing the covariance. Now
+    // the covariance is simply the dot product of the c and y coefficients.
+    c_s(0) -= a * a;
+    cout << c_st << endl << c_s.t();
   }
 
   // One worker per power set element S is allocate. This means that there are
@@ -139,12 +184,17 @@ class <?=$className?> {
   // as an integer.
   void PrepareRound(WorkUnits& workers, int num_threads) {
     for (uint32_t counter = 0; counter < kNumCoefs; counter++)
-      workers.push_back(WorkUnit(new LocalScheduler(counter), new cGLA(false)));
+      workers.push_back(WorkUnit(new LocalScheduler(counter), new cGLA()));
   }
 
   // A groub-by is performed for each sample. The y coefficient is the sum of
   // the pairwise products across the two groupings.
   void DoStep(Task& task, cGLA& gla) {
+<?  if ($foreignKey) { ?>
+    if (task >= 2)
+      return;
+<?  } ?>
+
     Map map_x(sample_x.size()), map_y(sample_y.size());
 
     for (auto item : sample_x)
@@ -152,6 +202,7 @@ class <?=$className?> {
 
     for (auto item : sample_y)
       Update(map_y, ChainHash(item.first, task), item.second);
+
     cout << "Task: " << task << " Num Groups x: " << map_x.size() << " Num Groups y: " << map_y.size() << endl;
 
     for (auto it_x : map_x) {
@@ -159,65 +210,49 @@ class <?=$className?> {
       if (it_y != map_y.end())
         y[task] += it_x.second * it_y->second;
     }
+
+<?  if ($foreignKey) { ?>
+    if (task == 1)
+      y.subvec(2, y.n_elem - 1).fill(y[task]);
+<?  } ?>
+
+
+<?  if ($outputVariance) { ?>
+    for (auto group : map_x)
+      y_x[task] += pow(group.second, 2);
+
+    for (auto group : map_y)
+      y_y[task] += pow(group.second, 2);
+<?  } ?>
   }
 
-<?  if ($outputCoefs) { ?>
-  void Finalize() {
-    index = 0;
-    UnbiasCoefficients(y, c_st, b);
-  }
-
-  bool GetNextResult(<?=typed_ref_args($outputs_)?>) {
-    if (index == kNumCoefs)
-      return false;
-    s = index;
-    y_s = y_hat[s];
-    c_s = c_s(s);
-    a = a;
-    b_s = b[s];
-    index++;
-    return true;
-  }
-<?  } else { ?>
   void GetResult(<?=typed_ref_args($outputs_)?>) {
     cout << "biased: " << y.t();
-    UnbiasCoefficients(y, c_st, b);
+    UnbiasCoefficients(y, c_st);
     cout << "unbiased: " << y.t();
-    covariance = 0;
-    for (uint32_t s = 0; s < kNumCoefs; s++)
-      covariance += c_s(s) * y(s);
-    covariance -= pow(a, 2) * y(0);
+    covariance = dot(y, c_s);
+<?  if ($outputVariance) { ?>
+    // y_y = arma::vec({4.5158e+12, 1.6472e+11, 1.1366e+11, 1.1366e+11, 9.0588e+10, 9.0588e+10, 9.0588e+10, 9.0588e+10});
+    cout << "biased left: " << y_x.t();
+    cout << "biased right: " << y_y.t();
+    UnbiasCoefficients(y_x, c_st);
+    UnbiasCoefficients(y_y, c_st);
+    cout << "unbiased left: " << y_x.t();
+    cout << "unbiased right: " << y_y.t();
+    var_x = dot(y_x, c_s) / pow(a, 2);
+    var_y = dot(y_y, c_s) / pow(a, 2);
+<?      if ($outputMean) { ?>
+    mean_x = sum_x;
+    mean_y = sum_y;
+<?      } ?>
+<?  } ?>
+<?  if ($outputStat) { ?>
+    time = timer.toc();
+    x_count = count_x;
+    y_count = count_y;
+<?  } ?>
     cout << "covariance: " << covariance << endl;
-  }
-<?  } ?>
-
- private:
-  // This updates a map given a value and key.
-  void Update(Map& map, uint64_t key, Value value) {
-    Map::iterator it = map.find(key);
-    if (it == map.end()) {
-      auto insertion = map.insert(Map::value_type(key, 0));
-      it = insertion.first;
-    }
-    it->second += value;
-  }
-
-  // This function takes in a set of keys and a bit mask specifying which keys
-  // are to be used. It hashes each relevent key to a uint64_t and then uses a
-  // chain hash to condense these hashed values into a single output. The mask
-  // is used as the starting value for the chain hash.
-  uint64_t ChainHash(XSamplingGLA::KeySet keys, uint32_t mask) {
-    uint64_t result = mask;
-<?  for ($index = 0; $index < $numRelations; $index++) { ?>
-    if (mask & 1 << <?=$index?>)
-        result = CongruentHash(result, Hash(get<<?=$index?>>(keys)));
-<?  } ?>
-    //cout << "Keys: ";
-<?  for ($index = 0; $index < $numRelations; $index++) { ?>
-    //cout << get<<?=$index?>>(keys) << " ";
-<?  } ?>
-    //cout << endl << "uint32_t: " << mask << " Result: " << result << endl;
-    return result;
+    cout << "TIME TAKEN FOR COEFFICIENTS: " << timer.toc() << endl;
   }
 };
 

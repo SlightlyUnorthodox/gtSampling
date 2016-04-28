@@ -27,7 +27,9 @@
 // Resources:
 // algorithm: min
 // limits: numeric_limits
-// HashFct.h: CongruentHash
+// vector: vector
+// utility: pair
+// base\HashFct.h: SpookyHash
 
 function Adjustable_Bernoulli($t_args, $inputs, $outputs) {
     // Class name is randomly generated.
@@ -45,13 +47,13 @@ function Adjustable_Bernoulli($t_args, $inputs, $outputs) {
     $maximum  = $t_args['maximum'];
     $increase = pow($t_args['increase'], 1 / count($keys));
     $decrease = pow($t_args['decrease'], 1 / count($keys));
-    $seed     = $t_args['seed'];
+    $seed     = get_default($t_args, 'seed', rand());
 
     // The outputs have the same time as inputs.
     $outputs  = array_combine(array_keys($outputs), $inputs);
     $outputs_ = array_combine(array_keys($inputs_), $outputs);
 
-    $sys_headers  = ['algorithm'];
+    $sys_headers  = ['algorithm', 'limits', 'vector', 'utility'];
     $user_headers = [];
     $lib_headers  = ['base\HashFct.h'];
     $libraries    = [];
@@ -96,10 +98,10 @@ class <?=$className?> {
   using HashType = uint64_t;
 
   // The minimum size allowed for the sample.
-  static const constexpr int kMinimumSize = <?=$minimum?>;
+  static const constexpr Sample::size_type kMinimumSize = <?=$minimum?>;
 
   // The maximum size allowed for the sample.
-  static const constexpr int kMaximumSize = <?=$maximum?>;
+  static const constexpr Sample::size_type kMaximumSize = <?=$maximum?>;
 
   // The factor by which the probability is increased by.
   static const constexpr double kIncrease = <?=$increase?>;
@@ -213,7 +215,7 @@ class <?=$className?> {
   static bool DetermineInclusion(KeySet keys, double probability) {
     HashType offset = kSeed;
 <?  for ($index = 0; $index < count($keys); $index++) { ?>
-    if (CongruentHash(Hash(get<<?=$index?>>(keys)), offset) > probability * kMax)
+    if (SpookyHash(Hash(get<<?=$index?>>(keys)), offset) > probability * kMax)
       return false;
     else
       offset <<= 1;
