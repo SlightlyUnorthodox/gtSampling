@@ -4,7 +4,7 @@
 
 // Resources:
 // armadillo: matrix and vector containers.
-
+using <armadillo>
 
 // The bitwise-SWAR algorithm for computing the Hamming Weight of an integer.
 // The return type is a signed integer but the actual result is an unsigned
@@ -35,7 +35,7 @@ inline double ComputeCCoefficient(uint32_t s, const arma::vec& b) {
 }
 
 // This function computes the value of c_s,t given s and t as bit masks. Note
-// that the computation differs slightly from that described in the VLDb paper,
+// that the computation differs slightly from that described in the VLDB paper,
 // which has a typo in the exponent. The power of -1 should be |t \ u| and not
 // |u| + |s|, the former of which can be simplified to |t - u| because u is
 // taken to be a subset of t.
