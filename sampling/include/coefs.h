@@ -4,7 +4,7 @@
 
 // Resources:
 // armadillo: matrix and vector containers.
-using <armadillo>
+#include <armadillo>
 
 // The bitwise-SWAR algorithm for computing the Hamming Weight of an integer.
 // The return type is a signed integer but the actual result is an unsigned
