@@ -50,20 +50,12 @@ class <?=$className?> {
   // The limit of the hashed value for which the input is kept.
   static const constexpr HashType kLimit = (kMax + 1) * kProbability - 1;
 
-  std::unordered_set<uint64_t> hashed_values;
-
  public:
   <?=$className?>() {}
 
   bool Filter(<?=const_typed_ref_args($inputs_)?>) {
     auto value = CongruentHash(Hash(key), kSeed);
-    if (hashed_values.count(value) > 0)
-      cout << "Hash conflict. Value: " << value << " Key: " << key << " Seed: " << kSeed << endl;
-    else
-      hashed_values.insert(value);
-    // if (hashed_values.size() % 100 == 0)
-    //   cout << "Hashed values reached size: " << hashed_values.size() << endl;
-    return  value <= kLimit;
+    return value <= kLimit;
   }
 };
 
