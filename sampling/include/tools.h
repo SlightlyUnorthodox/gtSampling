@@ -3,7 +3,6 @@
 // Resources:
 // base/HashFct.h: SpookyHash
 // unordered_map: unordered_map
-
 #include "base/HashFct.h"
 #include <unordered_map>
 
