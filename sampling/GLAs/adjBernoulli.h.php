@@ -42,7 +42,7 @@ function Adjustable_Bernoulli($t_args, $inputs, $outputs) {
     $inputs_ = $keys;
     $inputs_['value'] = $value;
 
-    // Initialization of local variables from template arguments.
+    // Processing of template arguments.
     $minimum  = $t_args['minimum'];
     $maximum  = $t_args['maximum'];
     $increase = pow($t_args['increase'], 1 / count($keys));

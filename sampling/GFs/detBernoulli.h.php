@@ -17,7 +17,7 @@ function Deterministic_Bernoulli($t_args, $inputs) {
     $inputs_ = array_combine(['key'], $inputs);
     $key = $inputs_['key'];
 
-    // Initialization of local variables from template arguments.
+    // Processing of template arguments.
     $seed = get_default($t_args, 'seed', rand());
     $prob = $t_args['p'];
 

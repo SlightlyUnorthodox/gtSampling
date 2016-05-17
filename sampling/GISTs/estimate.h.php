@@ -44,7 +44,7 @@ function Estimate($t_args, $outputs, $states)
     // Class name is randomly generated.
     $className = generate_name('Estimate');
 
-    // Initialization of local variables from template arguments.
+    // Processing of template arguments.
     $a = $t_args['a'];
     $b = $t_args['b'];
 
